@@ -8,13 +8,12 @@ tourner rapidement en CI/CD.
 import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parent.parent / "spark" / "silver"))
-
-from silver_jobs import (
-    _normalize_category,
-    _normalize_quantity,
-    _normalize_status,
-    _normalize_payment,
+sys.path.append(str(Path(__file__).resolve().parent.parent / "spark" / "common"))
+from normalizers import (
+    normalize_category as _normalize_category,
+    normalize_quantity as _normalize_quantity,
+    normalize_status as _normalize_status,
+    normalize_payment as _normalize_payment,
 )
 
 

@@ -11,13 +11,16 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "common"))
 from spark_session import get_spark_session  # noqa: E402
+from normalizers import (  # noqa: E402
+    normalize_category, normalize_quantity,
+    normalize_status, normalize_payment,
+)
 
 from pyspark.sql import Window
 from pyspark.sql.functions import (
     col, row_number, substring, trim, lower, initcap, to_date, coalesce, lit
 )
 
-import re
 from pyspark.sql.types import DoubleType, IntegerType
 from pyspark.sql.functions import (
     udf, upper, regexp_replace, to_date, to_timestamp,
@@ -28,8 +31,16 @@ from pyspark.sql.functions import substring
 
 from pyspark.sql.functions import isnan
 
-# Ajout pour le partitionnement de orders / orders_enriched 
+# Ajout pour le partitionnement de orders / orders_enriched
 from pyspark.sql.functions import months
+
+# UDFs construites à partir des fonctions pures importées de normalizers.py
+# (ces fonctions sont testées indépendamment dans tests/test_silver.py,
+# sans dépendance à Spark)
+normalize_category_udf = udf(normalize_category)
+normalize_quantity_udf = udf(normalize_quantity, IntegerType())
+normalize_status_udf = udf(normalize_status)
+normalize_payment_udf = udf(normalize_payment)
 
 
 def clean_customers(spark):
@@ -82,25 +93,6 @@ def clean_customers(spark):
     return valid_df, rejected_df
 
 
-# ---------- PRODUCTS ----------
-
-CANONICAL_CATEGORIES = [
-    "electronics", "sports", "beauty", "automotive",
-    "home", "kitchen", "toys", "clothing",
-]
-
-def _normalize_category(raw):
-    if raw is None:
-        return None
-    c = raw.strip().lower().rstrip("-_").replace("3", "e")
-    for name in CANONICAL_CATEGORIES:
-        if c == name or name.startswith(c) or c.startswith(name):
-            return name
-    return None  # non reconnu -> rejeté
-
-normalize_category_udf = udf(_normalize_category)
-
-
 def clean_products(spark):
     df = spark.table("bronze.ecommerce.products")
     rows_before = df.count()
@@ -126,60 +118,6 @@ def clean_products(spark):
     print(f"products : {rows_before} lignes brutes -> "
           f"{valid_df.count()} valides, {rejected_df.count()} rejetées")
     return valid_df, rejected_df
-
-
-# ---------- ORDERS ----------
-
-TEXT_NUMBERS = {
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-}
-
-def _normalize_quantity(raw):
-    if raw is None:
-        return None
-    q = raw.strip().lower()
-    if q == "":
-        return None
-    if q in TEXT_NUMBERS:
-        return TEXT_NUMBERS[q]
-    try:
-        return int(float(q))  # gère "2.0" -> 2
-    except ValueError:
-        return None
-
-normalize_quantity_udf = udf(_normalize_quantity, IntegerType())
-
-
-STATUS_MAP = {
-    "success": "success", "suc": "success",
-    "failed": "failed", "fail": "failed",
-    "refunded": "refunded", "ref": "refunded",
-}
-
-def _normalize_status(raw):
-    if raw is None:
-        return None
-    return STATUS_MAP.get(raw.strip().lower(), None)
-
-normalize_status_udf = udf(_normalize_status)
-
-
-PAYMENT_MAP = {
-    "wallet": "wallet",
-    "cash": "cash",
-    "upi": "upi",
-    "card": "card", "crad": "card", "crd": "card",
-    # "cd" volontairement absent -> non reconnu, rejeté (ambigu : card ou cod ?)
-}
-
-def _normalize_payment(raw):
-    if raw is None:
-        return None
-    cleaned = re.sub(r"[^a-z]", "", raw.strip().lower())  # enlève espaces, -, @
-    return PAYMENT_MAP.get(cleaned, None)
-
-normalize_payment_udf = udf(_normalize_payment)
 
 
 def clean_orders(spark):
@@ -221,7 +159,6 @@ def clean_orders(spark):
     print(f"orders : {rows_before} lignes brutes -> "
           f"{valid_df.count()} valides, {rejected_df.count()} rejetées")
     return valid_df, rejected_df
-
 
 
 def build_silver_orders(spark):

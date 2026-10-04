@@ -8,6 +8,7 @@ Si l'endpoint MinIO change un jour, on ne modifie qu'ici.
 """
 
 from pyspark.sql import SparkSession
+from pathlib import Path
 
 import os
 
@@ -46,4 +47,11 @@ def get_spark_session(app_name: str = "lakehouse-local") -> SparkSession:
         .config("spark.sql.catalog.gold.type", "hadoop")
         .config("spark.sql.catalog.gold.warehouse", "s3a://gold/")
     )
-    return builder.getOrCreate()
+
+    
+    spark = builder.getOrCreate()
+   
+    normalizers_path = Path(__file__).resolve().parent / "normalizers.py"
+    spark.sparkContext.addPyFile(str(normalizers_path))
+
+    return spark
