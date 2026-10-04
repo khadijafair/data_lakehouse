@@ -1,0 +1,31 @@
+# Configuration centrale du projet.
+# Un seul fichier à modifier si l'endpoint ou les identifiants changent.
+
+minio:
+  endpoint: "http://localhost:9000"       # depuis ta machine hôte
+  endpoint_internal: "http://minio:9000"  # depuis un conteneur Spark/Airflow du même réseau docker
+  # Valeurs réelles définies dans docker/.env (jamais versionné).
+  # Ici on garde juste les noms des variables d'environnement à lire.
+  access_key_env_var: "MINIO_ROOT_USER"
+  secret_key_env_var: "MINIO_ROOT_PASSWORD"
+  console_url: "http://localhost:9001"
+
+buckets:
+  bronze: "bronze"
+  silver: "silver"
+  gold: "gold"
+
+iceberg:
+  catalog_name: "lakehouse"
+  # Catalogue basé sur des fichiers dans MinIO (le plus simple en local,
+  # pas besoin d'un service de catalogue REST séparé pour démarrer).
+  catalog_type: "hadoop"
+  warehouse_path: "s3a://bronze/../"  # sera précisé par couche : s3a://bronze/, s3a://silver/, s3a://gold/
+
+spark:
+  app_name: "lakehouse-local"
+  master: "local[*]"
+  # Versions à figer précisément à l'étape "Environnement" (jars compatibles entre eux) :
+  iceberg_spark_runtime_version: "TO_DEFINE"   # ex: iceberg-spark-runtime-3.5_2.12
+  hadoop_aws_version: "TO_DEFINE"              # ex: hadoop-aws:3.3.4
+  aws_sdk_version: "TO_DEFINE"                 # ex: bundle:1.12.x
