@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "common"))
 from spark_session import get_spark_session  # noqa: E402
 
 from pyspark.sql.functions import (
-    col, sum as spark_sum, count, countDistinct, round as spark_round,
+    col, sum as spark_sum, countDistinct, round as spark_round,
 )
 
 

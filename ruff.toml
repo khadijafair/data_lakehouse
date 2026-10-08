@@ -1,0 +1,5 @@
+line-length = 120
+
+[lint]
+select = ["E", "F", "W"]  # erreurs, pyflakes, warnings — pas de règles de style subjectives
+ignore = ["E501"]  # lignes trop longues : pas bloquant pour ce projet

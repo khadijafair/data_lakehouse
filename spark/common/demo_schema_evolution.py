@@ -6,6 +6,7 @@ données n'a été réécrit (opération purement sur les métadonnées).
 
 import sys
 from pathlib import Path
+from pyspark.sql import Row
 
 sys.path.append(str(Path(__file__).resolve().parent))
 from spark_session import get_spark_session  # noqa: E402
@@ -38,7 +39,8 @@ print("\n=== 6. Les lignes existantes ont la nouvelle colonne à NULL ===")
 spark.table(TABLE).select("customer_id", "email", "marketing_consent").show(5, truncate=False)
 
 print("\n=== 7. On peut maintenant écrire de nouvelles lignes avec la colonne peuplée ===")
-from pyspark.sql import Row
+
+
 new_customer = spark.createDataFrame(
     [Row(customer_id="demo-schema-evolution-001",
          email="demo@example.com",

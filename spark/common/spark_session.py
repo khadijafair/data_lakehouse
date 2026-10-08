@@ -48,9 +48,9 @@ def get_spark_session(app_name: str = "lakehouse-local") -> SparkSession:
         .config("spark.sql.catalog.gold.warehouse", "s3a://gold/")
     )
 
-    
+
     spark = builder.getOrCreate()
-   
+
     normalizers_path = Path(__file__).resolve().parent / "normalizers.py"
     spark.sparkContext.addPyFile(str(normalizers_path))
 

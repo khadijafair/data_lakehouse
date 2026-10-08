@@ -22,7 +22,20 @@ jobs:
       - name: Installer les dépendances
         run: |
           python -m pip install --upgrade pip
-          pip install pytest==8.2.2
+          pip install pytest==8.2.2 pytest-cov==5.0.0 ruff==0.6.9
 
-      - name: Lancer les tests unitaires
-        run: pytest tests/ -v
+      - name: Linting (ruff)
+        run: ruff check spark/ tests/
+
+      - name: Lancer les tests unitaires avec couverture
+        run: pytest tests/ -v --cov=spark/common --cov-report=term-missing
+
+  docker-build-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Vérifier que l'image Airflow se construit
+        run: docker build -t lakehouse-airflow-check ./docker/airflow

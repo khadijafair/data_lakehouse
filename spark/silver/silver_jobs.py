@@ -18,16 +18,14 @@ from normalizers import (  # noqa: E402
 
 from pyspark.sql import Window
 from pyspark.sql.functions import (
-    col, row_number, substring, trim, lower, initcap, to_date, coalesce, lit
+    col, row_number, trim, lower, initcap, to_date, lit
 )
 
 from pyspark.sql.types import DoubleType, IntegerType
 from pyspark.sql.functions import (
-    udf, upper, regexp_replace, to_date, to_timestamp,
-    current_date, when, coalesce as coalesce_,
+    udf, when,
 )
 
-from pyspark.sql.functions import substring
 
 from pyspark.sql.functions import isnan
 
