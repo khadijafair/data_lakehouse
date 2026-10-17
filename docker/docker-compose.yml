@@ -88,6 +88,7 @@ services:
       - ../airflow/dags:/opt/airflow/dags
       - ../spark:/opt/project/spark
       - ../data:/opt/project/data
+      - ../docs:/opt/project/docs
     command: webserver
 
   airflow-scheduler:
@@ -107,6 +108,7 @@ services:
       - ../airflow/dags:/opt/airflow/dags
       - ../spark:/opt/project/spark
       - ../data:/opt/project/data
+      - ../docs:/opt/project/docs
     command: scheduler
 
 volumes:

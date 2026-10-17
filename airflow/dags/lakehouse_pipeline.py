@@ -65,3 +65,33 @@ with DAG(
         >> transform_gold
         >> gold_quality_check
     )
+
+    generate_report = BashOperator(
+        task_id="generate_report",
+        bash_command=f"cd {PROJECT}/quality && python generate_report.py",
+    )
+
+    (
+        ingest_bronze
+        >> bronze_quality_check
+        >> transform_silver
+        >> silver_quality_check
+        >> transform_gold
+        >> gold_quality_check
+        >> generate_report
+    )
+
+    generate_report = BashOperator(
+        task_id="generate_report",
+        bash_command=f"cd {PROJECT}/quality && python generate_report.py",
+    )
+
+    (
+        ingest_bronze
+        >> bronze_quality_check
+        >> transform_silver
+        >> silver_quality_check
+        >> transform_gold
+        >> gold_quality_check
+        >> generate_report
+    )
