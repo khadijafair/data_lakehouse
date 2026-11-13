@@ -11,6 +11,12 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "common"))
 from spark_session import get_spark_session  # noqa: E402
+from rejection_rules import (  # noqa: E402
+    customer_rules,
+    order_rules,
+    product_rules,
+    split_by_rules,
+)
 from normalizers import (  # noqa: E402
     normalize_category, normalize_quantity,
     normalize_status, normalize_payment,
@@ -27,7 +33,6 @@ from pyspark.sql.functions import (
 )
 
 
-from pyspark.sql.functions import isnan
 
 # Ajout pour le partitionnement de orders / orders_enriched
 from pyspark.sql.functions import months
@@ -78,12 +83,7 @@ def clean_customers(spark):
 
     # 4. Validation : customer_id et email ne doivent pas être nuls.
     #    On sépare les lignes valides des lignes rejetées.
-    valid_df = df_typed.filter(
-        col("customer_id").isNotNull() & col("email").isNotNull()
-    )
-    rejected_df = df_typed.filter(
-        col("customer_id").isNull() | col("email").isNull()
-    ).withColumn("_rejection_reason", lit("customer_id ou email manquant"))
+    valid_df, rejected_df = split_by_rules(df_typed, customer_rules())
 
     print(f"customers : {rows_before} lignes brutes -> {rows_after_dedup} après dédup "
           f"-> {valid_df.count()} valides, {rejected_df.count()} rejetées")
@@ -102,16 +102,7 @@ def clean_products(spark):
         .withColumn("category", normalize_category_udf(col("category")))
     )
 
-    valid_df = df_clean.filter(
-        col("product_id").isNotNull()
-        & col("price").isNotNull() & ~isnan(col("price")) & (col("price") >= 0)
-        & col("category").isNotNull()
-    )
-    rejected_df = df_clean.filter(
-        col("product_id").isNull()
-        | col("price").isNull() | isnan(col("price")) | (col("price") < 0)
-        | col("category").isNull()
-    ).withColumn("_rejection_reason", lit("price ou category invalide"))
+    valid_df, rejected_df = split_by_rules(df_clean, product_rules())
 
     print(f"products : {rows_before} lignes brutes -> "
           f"{valid_df.count()} valides, {rejected_df.count()} rejetées")
@@ -141,18 +132,11 @@ def clean_orders(spark):
         .withColumn("order_date", parsed_date)
 
     )
-    valid_df = df_clean.filter(
-        col("order_id").isNotNull()
-        & col("customer_id").isNotNull()
-        & col("order_amount").isNotNull() & ~isnan(col("order_amount")) & (col("order_amount") >= 0)
-        & col("quantity").isNotNull() & (col("quantity") > 0)
-        & col("status").isNotNull()
-        & col("payment_method").isNotNull()
-        & col("order_date").isNotNull()
-    )
-    rejected_df = df_clean.subtract(valid_df).withColumn(
-        "_rejection_reason", lit("un ou plusieurs champs invalides")
-    )
+    # Les dates hors format yyyy-MM-dd sont rejetées volontairement : dans ce
+    # jeu de données, chaque format alternatif ne contient qu'une seule valeur
+    # répétée (2024/31/01, 31-12-2023, 2025/01/10 12:00), donc des valeurs
+    # sentinelles et non de vraies dates de commande.
+    valid_df, rejected_df = split_by_rules(df_clean, order_rules())
 
     print(f"orders : {rows_before} lignes brutes -> "
           f"{valid_df.count()} valides, {rejected_df.count()} rejetées")
