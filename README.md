@@ -1,6 +1,6 @@
 # Data Lakehouse — Projet E-commerce
 
-Architecture Lakehouse locale (Bronze → Silver → Gold) construite avec MinIO, Apache Spark, Apache Iceberg, Trino, dbt et Apache Airflow, sur un jeu de données e-commerce synthétique volontairement sale (43,6 % des lignes sources écartées en Silver, motif de rejet tracé ligne par ligne).
+Architecture Lakehouse locale (Bronze → Silver → Gold) construite avec MinIO, Apache Spark, Apache Iceberg, Trino, dbt, Apache Kafka et Apache Airflow, sur un jeu de données e-commerce synthétique volontairement sale (43,6 % des lignes sources écartées en Silver, motif de rejet tracé ligne par ligne).
 
 ## Sommaire
 
@@ -10,6 +10,7 @@ Architecture Lakehouse locale (Bronze → Silver → Gold) construite avec MinIO
 - [Démarrage](#démarrage)
 - [Structure du projet](#structure-du-projet)
 - [Pipeline de données](#pipeline-de-données)
+- [Flux temps réel : clickstream avec Kafka](#flux-temps-réel--clickstream-avec-kafka)
 - [Qualité des données](#qualité-des-données)
 - [Robustesse Iceberg](#robustesse-iceberg)
 - [Orchestration](#orchestration)
@@ -38,6 +39,9 @@ MinIO (stockage S3 local)
 ↓
 Analyse / Dashboard (Power BI, ou SQL direct via Trino)
 
+Flux temps réel (optionnel, profil Docker `streaming`) :
+clickstream CSV → producteur Python → **Kafka** → **Spark Structured Streaming** → Bronze → Silver → dbt (`product_funnel`)
+
 Chaque couche est un espace de noms Iceberg distinct (`bronze.ecommerce`, `silver.ecommerce`, `gold.ecommerce`), stocké dans son propre bucket MinIO (`bronze/`, `silver/`, `gold/`).
 
 **Catalogue Iceberg partagé (JDBC / PostgreSQL)** : la liste des tables et le pointeur vers leurs métadonnées sont rangés dans la base `iceberg` du PostgreSQL. Spark (Bronze, Silver) et Trino (Gold via dbt) lisent et écrivent donc **le même catalogue**, sans service supplémentaire.
@@ -51,6 +55,7 @@ Chaque couche est un espace de noms Iceberg distinct (`bronze.ecommerce`, `silve
 | Traitement | Apache Spark 3.5 (PySpark) | Logique de nettoyage riche (UDFs) nécessaire sur ce dataset très sale |
 | Catalogue Iceberg | JDBC (PostgreSQL) | Lu par Spark **et** par Trino ; Trino ne sait pas lire un catalogue « hadoop » (types acceptés : hive_metastore, glue, jdbc, rest, nessie, snowflake) |
 | Moteur SQL | **Trino** 445 | Requêtes SQL interactives sur les tables Iceberg, moteur d'exécution de dbt |
+| Streaming | **Apache Kafka** 3.9 (KRaft) + **Spark Structured Streaming** | Ingestion continue des événements de navigation, reprise exacte grâce au checkpoint |
 | Couche Gold | **dbt** (dbt-trino) | Modèles SQL versionnés, tests de données (33), documentation et lignage générés |
 | Orchestration | Apache Airflow 2.9 (Docker) | Standard du marché pour l'orchestration de pipelines batch |
 | Qualité des données | Règles manuelles (Bronze/Silver/Gold) + **Great Expectations** en complément | Grande Expectations formalise et documente visuellement les règles déjà implémentées |
@@ -119,10 +124,12 @@ data-lakehouse/
 ├── airflow/dags/ # DAG d’orchestration
 ├── dbt/ # couche Gold : modèles SQL, tests, macros (dbt-trino)
 ├── trino/catalog/ # catalogues Trino bronze/silver/gold (Iceberg JDBC)
+├── streaming/producer/ # producteur Kafka : rejeu du clickstream (simulation de temps réel)
 ├── spark/
 │ ├── common/ # config Spark/Iceberg, fonctions de normalisation, scripts de démo
 │ ├── ingestion/ # Bronze
-│ ├── silver/ # nettoyage, validation, jointure
+│ ├── streaming/ # Kafka -> Bronze (Spark Structured Streaming)
+│ ├── silver/ # nettoyage, validation, jointure (+ silver_clickstream.py)
 │ ├── gold/ # ancienne couche Gold en PySpark (référence, hors DAG)
 │ └── quality/ # contrôles qualité (scripts + Great Expectations)
 ├── data/sample/gold_export # CSV sources 
@@ -156,6 +163,35 @@ Construites par **dbt sur Trino** (`dbt/models/gold/`), à partir des tables Sil
 
 Un avertissement (non bloquant) signale **4 286 commandes « success » à montant 0** : 12 988 commandes sources ont `0` comme montant, accepté par la règle Silver `order_amount >= 0`. À trancher : les rejeter en Silver ou les garder.
 
+## Flux temps réel : clickstream avec Kafka
+
+**Pourquoi** : les clients, produits et commandes arrivent en lots (batch). Les événements de navigation arrivent, eux, en continu. Les deux se rejoignent dans la couche Gold : l'entonnoir `product_funnel` (vues → ajouts au panier → commandes) n'est calculable qu'en croisant les deux sources (lien par `product_id`, présent dans l'URL de 356 366 événements).
+
+**Simulation, à dire clairement** : `streaming/producer/replay_clickstream.py` rejoue `clickstream_500k_events.csv` (Kaggle) dans le topic `clickstream`, au débit choisi (`--rate`, 2 000 événements/s par défaut). Les valeurs sont envoyées telles quelles, sales comprises.
+
+**Bronze** (`spark/streaming/stream_clickstream_bronze.py`) : Spark Structured Streaming lit Kafka par micro-lots (100 000 messages max) et les ajoute à `bronze.ecommerce.clickstream` (Iceberg). Tout reste en texte, avec partition, offset et horodatage Kafka. Le checkpoint (dans MinIO) garde les offsets traités : une relance reprend exactement où elle s'était arrêtée (vérifié : 2e passage = +0 ligne ; 5 000 messages republiés = +5 000 lignes). Deux modes : `--mode available-now` (traite ce qui est en attente puis s'arrête, utilisé par Airflow) et `--mode continuous` (micro-lot toutes les 10 s).
+
+**Silver** (`spark/silver/silver_clickstream.py`), motifs de rejet tracés par ligne :
+- dédoublonnage sur `event_id` (un message rejoué n'est compté qu'une fois) ;
+- 4 écritures valides de l'horodatage acceptées (ISO avec ou sans microsecondes et fuseau, espace au lieu du « T ») ;
+- rejetés : 20 160 horodatages vides, 20 011 × `2024/31/01 25:61:00` (25 h 61), 19 919 dates postérieures à l'extraction du jeu de données (2025-12-02 16:05 UTC). La date de référence est **fixe** et non l'horloge du jour : le résultat est reproductible ;
+- `product_id` extrait de l'URL ; `customer_id` vide = visiteur anonyme (gardé).
+
+Résultat (13/11/2026) : 505 000 messages Kafka → 500 000 après dédoublonnage → **439 910 valides**, 60 090 rejetés. Période réelle couverte : 2025-09-02 → 2025-12-02.
+
+**Gold** (`dbt/models/gold/product_funnel.sql`) : par produit, sur la période commune aux deux sources (2025-09-03 → 2025-12-01, variables dbt) : 201 481 vues → 50 054 ajouts au panier (24,8 %) → 10 950 commandes (21,9 % des paniers, 5,4 % des vues). Tests : clés, taux entre 0 et 1, intégrité vers `silver.products`, et totaux identiques aux événements Silver (`assert_funnel_matches_silver`).
+
+Limites (données synthétiques) : `session_id` regroupe ~43 clients différents par session, donc pas d'analyse par session ; les taux sont presque identiques d'une catégorie à l'autre ; ils illustrent la mécanique, pas un vrai comportement d'achat.
+
+**Lancer** :
+```powershell
+cd docker
+docker compose --profile streaming up -d --build        # + Kafka et le producteur (environ 1 Go de RAM en plus)
+```
+Puis, dans Airflow : DAG `lakehouse_pipeline` (au moins une fois, pour les commandes), puis DAG `clickstream_pipeline`.
+Mode continu, pour voir le flux arriver : `docker exec -it lakehouse-airflow-scheduler bash -c "cd /opt/project/spark/streaming && python stream_clickstream_bronze.py --mode continuous"`.
+Sans le profil `streaming`, le reste du projet fonctionne normalement (le DAG principal exclut la partie clickstream de dbt).
+
 ## Qualité des données
 
 Deux bugs réels trouvés et corrigés pendant le développement :
@@ -182,6 +218,12 @@ ingest_bronze → bronze_quality_check → transform_silver → silver_quality_c
 → dbt_build_gold → gold_quality_check → generate_report
 ```
 
+DAG du flux temps réel (`clickstream_pipeline`, nécessite le profil `streaming`) :
+
+```
+ingest_clickstream_bronze → transform_silver_clickstream → dbt_build_funnel
+```
+
 `dbt_build_gold` lance `dbt build` (modèles + tests) : un test dbt en échec arrête le DAG. dbt est installé dans un venv séparé de l'image Airflow (`/opt/dbt_venv`) pour éviter les conflits de dépendances.
 
 Chaque étape bloque la suivante en cas d'échec. Retries configurés (1 tentative, 2 min de délai) pour les échecs transitoires.
@@ -189,7 +231,7 @@ Chaque étape bloque la suivante en cas d'échec. Retries configurés (1 tentati
 ## CI/CD
 
 GitHub Actions, déclenché à chaque push sur `main` :
-- **unit-tests** : lint (ruff) → vérification du projet dbt (`dbt parse`) → tests unitaires (pytest : fonctions de normalisation sans Spark, motifs de rejet Silver sur une SparkSession locale, structure du DAG, alignement des catalogues Spark/Trino) → couverture
+- **unit-tests** : lint (ruff) → vérification du projet dbt (`dbt parse`) → tests unitaires (pytest : fonctions de normalisation sans Spark, motifs de rejet Silver sur une SparkSession locale, structure des DAG, alignement des catalogues Spark/Trino, producteur Kafka et règles du clickstream) → couverture
 - **docker-build-check** : vérifie que l'image Airflow personnalisée reste buildable
 
 Les fonctions de nettoyage (`normalize_category`, `normalize_quantity`, `normalize_status`, `normalize_payment`) sont isolées dans `spark/common/normalizers.py`, sans dépendance Spark, pour des tests rapides. Les règles de rejet Silver (`spark/common/rejection_rules.py`) sont testées sur une SparkSession locale, sans Iceberg ni MinIO.
@@ -233,6 +275,6 @@ Pourquoi 90 000 dates sont rejetées : seul le format `yyyy-MM-dd` est accepté.
 ## Extensions possibles
 
 
-- Intégration Support Tickets + Clickstream (sources non utilisées dans le MVP ; le clickstream de 500 000 événements se prête à une ingestion streaming)
+- Intégration des Support Tickets (source non utilisée)
 - Prédiction (churn, recommandation)
 - Entity resolution sur les doublons clients identifiés

@@ -29,3 +29,22 @@ sources:
         columns:
           - name: customer_id
             tests: [not_null, unique]
+      - name: products
+        description: Catalogue produits valide (405 produits).
+        columns:
+          - name: product_id
+            tests: [not_null, unique]
+      - name: clickstream
+        description: >
+          Événements de navigation arrivés par Kafka (Spark Structured Streaming -> Bronze),
+          nettoyés en Silver (silver_clickstream.py). Période réelle : 2025-09-02 -> 2025-12-02.
+        columns:
+          - name: event_id
+            tests: [not_null, unique]
+          - name: event_type
+            tests:
+              - accepted_values:
+                  arguments:
+                    values: ['page_view', 'add_to_cart', 'search', 'login']
+          - name: event_ts
+            tests: [not_null]

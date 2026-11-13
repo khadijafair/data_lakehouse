@@ -44,3 +44,28 @@ models:
         # >= 0 et pas > 0 : 693 clients n'ont que des commandes à montant 0
         # (voir tests/warn_zero_amount_success_orders.sql)
         tests: [not_null, non_negative]
+
+  - name: product_funnel
+    description: >
+      Entonnoir par produit (vues -> paniers -> commandes) sur la période commune au
+      clickstream (temps réel, Kafka) et aux commandes (batch).
+    columns:
+      - name: product_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: source('silver', 'products')
+                field: product_id
+      - name: views
+        tests: [not_null, non_negative]
+      - name: add_to_carts
+        tests: [not_null, non_negative]
+      - name: orders
+        tests: [not_null, non_negative]
+      - name: view_to_cart_rate
+        tests: [rate_between_0_and_1]
+      - name: view_to_order_rate
+        tests: [rate_between_0_and_1]
+

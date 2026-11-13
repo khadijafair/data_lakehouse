@@ -54,7 +54,10 @@ with DAG(
     dbt_build_gold = BashOperator(
         task_id="dbt_build_gold",
         bash_command=(
-            f"{DBT} build --project-dir {DBT_PROJECT} --profiles-dir {DBT_PROJECT} "
+            # La partie clickstream (entonnoir) est construite par le DAG clickstream_pipeline,
+            # pour que ce DAG marche aussi sans Kafka.
+            f"{DBT} build --exclude source:silver.clickstream+ "
+            f"--project-dir {DBT_PROJECT} --profiles-dir {DBT_PROJECT} "
             "--target-path /tmp/dbt_target --log-path /tmp/dbt_logs"
         ),
     )
