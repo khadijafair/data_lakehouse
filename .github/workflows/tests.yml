@@ -25,7 +25,7 @@ jobs:
           pip install pytest==8.2.2 pytest-cov==5.0.0 ruff==0.6.9 pyspark==3.5.2
 
       - name: Linting (ruff)
-        run: ruff check spark/ tests/ airflow/
+        run: ruff check spark/ tests/ airflow/ streaming/
 
       - name: Vérifier le projet dbt (syntaxe, références, tests déclarés)
         run: |
@@ -36,7 +36,6 @@ jobs:
       - name: Lancer les tests unitaires avec couverture
         run: pytest tests/ -v --cov=spark/common --cov-report=term-missing
 
-
   docker-build-check:
     runs-on: ubuntu-latest
 
@@ -46,3 +45,5 @@ jobs:
 
       - name: Vérifier que l'image Airflow se construit
         run: docker build -t lakehouse-airflow-check ./docker/airflow
+      - name: Vérifier que l'image du producteur Kafka se construit
+        run: docker build -t lakehouse-clickstream-producer-check ./streaming/producer

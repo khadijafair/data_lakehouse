@@ -84,6 +84,54 @@ services:
     volumes:
       - ../trino/catalog:/etc/trino/catalog:ro
 
+  # ---------- Streaming (optionnel) : docker compose --profile streaming up -d ----------
+  # Broker Kafka unique en mode KRaft (sans ZooKeeper). Limité à 512 Mo de mémoire Java.
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: lakehouse-kafka
+    profiles: ["streaming"]
+    ports:
+      - "29092:29092"   # accès depuis la machine hôte : localhost:29092
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Rejoue clickstream_500k_events.csv dans le topic `clickstream` (simulation de temps réel).
+  # Relancer : docker compose --profile streaming run --rm clickstream-producer --rate 500 --limit 10000
+  clickstream-producer:
+    build:
+      context: ../streaming/producer
+    container_name: lakehouse-clickstream-producer
+    profiles: ["streaming"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      CLICKSTREAM_FILE: /data/clickstream_500k_events.csv
+    volumes:
+      - ../data/sample:/data:ro
+    command: ["--rate", "2000"]
+    restart: "no"
+
   airflow-init:
     build:
       context: ./airflow
@@ -117,6 +165,7 @@ services:
       ICEBERG_CATALOG_URI: jdbc:postgresql://postgres:5432/iceberg
       TRINO_HOST: trino
       TRINO_PORT: "8080"
+      KAFKA_BOOTSTRAP: kafka:9092
     ports:
       - "8080:8080"
     volumes:
@@ -143,6 +192,7 @@ services:
       ICEBERG_CATALOG_URI: jdbc:postgresql://postgres:5432/iceberg
       TRINO_HOST: trino
       TRINO_PORT: "8080"
+      KAFKA_BOOTSTRAP: kafka:9092
     volumes:
       - ../airflow/dags:/opt/airflow/dags
       - ../spark:/opt/project/spark
@@ -154,3 +204,4 @@ services:
 volumes:
   minio_data:
   postgres_data:
+  kafka_data:
