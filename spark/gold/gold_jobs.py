@@ -2,6 +2,11 @@
 Transformation Silver -> Gold : construit les 4 tables business
 définies dans le cahier des charges (section 9).
 
+⚠️ Depuis le 13/11/2026, la couche Gold est construite par dbt sur Trino
+(dossier dbt/models/gold, tâche Airflow `dbt_build_gold`). Ce script n'est plus
+dans le DAG ; il reste comme implémentation de référence : les tables produites
+par dbt ont été comparées à celles de ce script, avec 0 valeur différente.
+
 Décision métier documentée : seules les commandes status == 'success'
 comptent dans le chiffre d'affaires et les métriques de vente.
 Les commandes failed/refunded n'ont jamais généré de revenu réel,

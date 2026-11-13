@@ -77,7 +77,8 @@ lines.append(f"\n**Chiffre d'affaires total (commandes success)** : {total_reven
 # ---------- QUALITÉ ----------
 lines.append("\n## Qualité des données\n")
 lines.append("Contrôles qualité exécutés : `check_bronze.py`, `check_silver.py`, `check_gold.py` "
-              "(bloquants dans le DAG Airflow) + suites Great Expectations "
+              "(bloquants dans le DAG Airflow) + 33 tests dbt sur la couche Gold "
+              "(`dbt build`, bloquants) + suites Great Expectations "
               "(voir `gx/uncommitted/data_docs/local_site/index.html` pour le détail).")
 
 # ---------- DURÉE ----------

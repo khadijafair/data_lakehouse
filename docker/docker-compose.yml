@@ -52,6 +52,38 @@ services:
       interval: 5s
       retries: 5
 
+  # Crée la base `iceberg` (catalogue Iceberg JDBC lu par Spark ET Trino).
+  # Service ponctuel et idempotent : marche aussi sur un volume postgres déjà existant.
+  iceberg-catalog-init:
+    image: postgres:15
+    container_name: lakehouse-iceberg-catalog-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: airflow
+    volumes:
+      - ./postgres/init-iceberg-catalog.sql:/init-iceberg-catalog.sql:ro
+    entrypoint: ["psql", "-h", "postgres", "-U", "airflow", "-d", "airflow", "-f", "/init-iceberg-catalog.sql"]
+
+  # Moteur SQL : lit et écrit les tables Iceberg des 3 catalogues (utilisé par dbt).
+  # UI : http://localhost:8085 — CLI : docker exec -it lakehouse-trino trino
+  trino:
+    image: trinodb/trino:445
+    container_name: lakehouse-trino
+    depends_on:
+      iceberg-catalog-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    ports:
+      - "8085:8080"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ../trino/catalog:/etc/trino/catalog:ro
+
   airflow-init:
     build:
       context: ./airflow
@@ -82,6 +114,9 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      ICEBERG_CATALOG_URI: jdbc:postgresql://postgres:5432/iceberg
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
     ports:
       - "8080:8080"
     volumes:
@@ -89,6 +124,7 @@ services:
       - ../spark:/opt/project/spark
       - ../data:/opt/project/data
       - ../docs:/opt/project/docs
+      - ../dbt:/opt/project/dbt
     command: webserver
 
   airflow-scheduler:
@@ -104,11 +140,15 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      ICEBERG_CATALOG_URI: jdbc:postgresql://postgres:5432/iceberg
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
     volumes:
       - ../airflow/dags:/opt/airflow/dags
       - ../spark:/opt/project/spark
       - ../data:/opt/project/data
       - ../docs:/opt/project/docs
+      - ../dbt:/opt/project/dbt
     command: scheduler
 
 volumes:
