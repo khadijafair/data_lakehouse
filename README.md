@@ -1,6 +1,6 @@
 # Data Lakehouse — Projet E-commerce
 
-Architecture Lakehouse locale (Bronze → Silver → Gold) construite avec MinIO, Apache Spark, Apache Iceberg et Apache Airflow, sur un jeu de données e-commerce synthétique volontairement sale (25-30% d'anomalies).
+Architecture Lakehouse locale (Bronze → Silver → Gold) construite avec MinIO, Apache Spark, Apache Iceberg et Apache Airflow, sur un jeu de données e-commerce synthétique volontairement sale (43,6 % des lignes sources écartées en Silver, motif de rejet tracé ligne par ligne).
 
 ## Sommaire
 
@@ -158,10 +158,10 @@ Chaque étape bloque la suivante en cas d'échec. Retries configurés (1 tentati
 ## CI/CD
 
 GitHub Actions, déclenché à chaque push sur `main` :
-- **unit-tests** : lint (ruff) → tests unitaires (pytest, fonctions de normalisation testées indépendamment de Spark) → couverture
+- **unit-tests** : lint (ruff) → tests unitaires (pytest : fonctions de normalisation sans Spark, motifs de rejet Silver sur une SparkSession locale, structure du DAG) → couverture
 - **docker-build-check** : vérifie que l'image Airflow personnalisée reste buildable
 
-Les fonctions de nettoyage (`normalize_category`, `normalize_quantity`, `normalize_status`, `normalize_payment`) sont isolées dans `spark/common/normalizers.py`, sans dépendance Spark, pour permettre un CI rapide (quelques secondes, sans installer PySpark).
+Les fonctions de nettoyage (`normalize_category`, `normalize_quantity`, `normalize_status`, `normalize_payment`) sont isolées dans `spark/common/normalizers.py`, sans dépendance Spark, pour des tests rapides. Les règles de rejet Silver (`spark/common/rejection_rules.py`) sont testées sur une SparkSession locale, sans Iceberg ni MinIO.
 
 ## Résultats
 
@@ -174,6 +174,23 @@ Les fonctions de nettoyage (`normalize_category`, `normalize_quantity`, `normali
 
 CA total calculé : ~13,4 milliards (données synthétiques, échelle arbitraire du dataset).
 
+Chiffres remesurés le 13/11/2026 sur les CSV Kaggle `vinaykandimalla/customer-360` : identiques au run du 17/10, et les 4 tables Gold sont identiques valeur par valeur aux exports de `data/gold_export/`.
+
+### Lignes écartées en Silver, par motif
+
+Chaque ligne rejetée porte la liste exacte des champs fautifs dans `_rejection_reason` (une ligne peut cumuler plusieurs motifs).
+
+| Table | Sources | Conservées | Écartées | Motifs |
+|---|---|---|---|---|
+| customers | 50 000 | 47 200 | 2 800 | 1 800 doublons de `customer_id`, 1 000 emails manquants |
+| products | 500 | 405 | 95 | prix invalide 82, catégorie inconnue 30 |
+| orders | 300 000 | 150 137 | 149 863 | date 90 000, quantité 44 867, montant 38 537, moyen de paiement 10 586 |
+| **Total** | **350 500** | **197 742** | **152 758 (43,6 %)** | |
+
+Puis 31 228 commandes valides sont isolées comme orphelines (client ou produit absent de Silver) : `orders_enriched` = 118 909.
+
+Pourquoi 90 000 dates sont rejetées : seul le format `yyyy-MM-dd` est accepté. Les autres formats ne contiennent chacun qu'**une seule valeur répétée** (`2024/31/01` ×18 110, `31-12-2023` ×18 050, `2025/01/10 12:00` ×17 952), à quoi s'ajoutent 17 974 horodatages ISO dans le futur et 17 914 dates vides. Ce sont des valeurs sentinelles : les convertir créerait trois pics artificiels dans `sales_daily`.
+
 ## Limites connues et pistes non retenues
 
 **dbt** a été testé comme alternative SQL pour la couche Gold. La connexion a fonctionné, mais l'adaptateur `dbt-spark` en mode `session` ne supporte qu'un seul catalogue Spark par défaut — incompatible avec l'architecture à 3 catalogues Iceberg distincts (un par bucket bronze/silver/gold) mise en place dès le début du projet. Une migration vers un catalogue unique avec des namespaces aurait résolu le problème, mais au prix d'une refonte touchant une dizaine de fichiers déjà testés et de la perte de l'historique de time travel démontré. Le choix a été fait de ne pas migrer, dbt n'étant pas une exigence du cahier des charges (listé en extension optionnelle).
@@ -185,6 +202,6 @@ CA total calculé : ~13,4 milliards (données synthétiques, échelle arbitraire
 ## Extensions possibles
 
 
-- Intégration Support Tickets + Clickstream (sources non utilisées dans le MVP)
+- Intégration Support Tickets + Clickstream (sources non utilisées dans le MVP ; le clickstream de 500 000 événements se prête à une ingestion streaming)
 - Prédiction (churn, recommandation)
 - Entity resolution sur les doublons clients identifiés
