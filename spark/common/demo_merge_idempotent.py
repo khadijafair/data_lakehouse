@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent))
 from spark_session import get_spark_session  # noqa: E402
 from pyspark.sql import Row
-from pyspark.sql.functions import lit, current_timestamp
+from pyspark.sql.functions import current_timestamp
 
 spark = get_spark_session("demo-merge-idempotent")
 spark.sql("CREATE NAMESPACE IF NOT EXISTS bronze.ecommerce")
@@ -76,7 +76,7 @@ spark.sql(f"""
 """)
 count_after_3 = spark.table(TABLE).count()
 print(f"Lignes après batch incrémental : {count_after_3}")
-print(f"--> Attendu : 4 (3 existants + 1 nouveau, C002 mis à jour pas dupliqué)")
+print("--> Attendu : 4 (3 existants + 1 nouveau, C002 mis à jour pas dupliqué)")
 
 print("\n=== Résultat final de la table ===")
 spark.table(TABLE).orderBy("customer_id").show(truncate=False)
