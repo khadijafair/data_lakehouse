@@ -19,6 +19,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Spark 3.5 supporte Java 8, 11 et 17 : on fixe Java 17 au lieu de dépendre
+      # du Java par défaut de l'image ubuntu-latest (qui change avec les versions d'Ubuntu).
+      - name: Installer Java 17 (pour les tests Spark)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Installer les dépendances
         run: |
           python -m pip install --upgrade pip
