@@ -1,6 +1,6 @@
 # Data Lakehouse — Projet E-commerce
 
-Architecture Lakehouse locale (Bronze → Silver → Gold) construite avec MinIO, Apache Spark, Apache Iceberg et Apache Airflow, sur un jeu de données e-commerce synthétique volontairement sale (43,6 % des lignes sources écartées en Silver, motif de rejet tracé ligne par ligne).
+Architecture Lakehouse locale (Bronze → Silver → Gold) construite avec MinIO, Apache Spark, Apache Iceberg, Trino, dbt et Apache Airflow, sur un jeu de données e-commerce synthétique volontairement sale (43,6 % des lignes sources écartées en Silver, motif de rejet tracé ligne par ligne).
 
 ## Sommaire
 
@@ -30,14 +30,17 @@ Airflow (orchestration)
 ↓
 MinIO (stockage S3 local)
 ↓
-┌─────────┬─────────┬─────────┐
-│ Bronze │ Silver │ Gold │
-│ (brut) │(nettoyé)│(business)│
-└─────────┴─────────┴─────────┘
+┌──────────────┬───────────────┬──────────────────┐
+│   Bronze     │    Silver     │      Gold        │
+│   (brut)     │  (nettoyé)    │   (business)     │
+│   Spark      │    Spark      │  dbt sur Trino   │
+└──────────────┴───────────────┴──────────────────┘
 ↓
-Analyse / Dashboard
+Analyse / Dashboard (Power BI, ou SQL direct via Trino)
 
 Chaque couche est un espace de noms Iceberg distinct (`bronze.ecommerce`, `silver.ecommerce`, `gold.ecommerce`), stocké dans son propre bucket MinIO (`bronze/`, `silver/`, `gold/`).
+
+**Catalogue Iceberg partagé (JDBC / PostgreSQL)** : la liste des tables et le pointeur vers leurs métadonnées sont rangés dans la base `iceberg` du PostgreSQL. Spark (Bronze, Silver) et Trino (Gold via dbt) lisent et écrivent donc **le même catalogue**, sans service supplémentaire.
 
 ## Technologies et choix techniques
 
@@ -46,11 +49,14 @@ Chaque couche est un espace de noms Iceberg distinct (`bronze.ecommerce`, `silve
 | Stockage objet | MinIO | Compatible API S3, reproduit un vrai environnement cloud en local |
 | Table format | **Apache Iceberg** (vs Delta Lake) | Standard ouvert indépendant d'un fournisseur cloud, largement adopté (Snowflake, Trino...) |
 | Traitement | Apache Spark 3.5 (PySpark) | Logique de nettoyage riche (UDFs) nécessaire sur ce dataset très sale |
+| Catalogue Iceberg | JDBC (PostgreSQL) | Lu par Spark **et** par Trino ; Trino ne sait pas lire un catalogue « hadoop » (types acceptés : hive_metastore, glue, jdbc, rest, nessie, snowflake) |
+| Moteur SQL | **Trino** 445 | Requêtes SQL interactives sur les tables Iceberg, moteur d'exécution de dbt |
+| Couche Gold | **dbt** (dbt-trino) | Modèles SQL versionnés, tests de données (33), documentation et lignage générés |
 | Orchestration | Apache Airflow 2.9 (Docker) | Standard du marché pour l'orchestration de pipelines batch |
 | Qualité des données | Règles manuelles (Bronze/Silver/Gold) + **Great Expectations** en complément | Grande Expectations formalise et documente visuellement les règles déjà implémentées |
 | CI/CD | GitHub Actions (lint, tests, build Docker) | Vérifie automatiquement la logique de nettoyage et la buildabilité de l'infra à chaque push |
 
-**dbt a été évalué et volontairement abandonné** — voir [Limites connues](#limites-connues-et-pistes-non-retenues).
+**dbt** avait d'abord été abandonné (dbt-spark ne gérait pas les 3 catalogues) ; il est revenu avec Trino — voir [Couche Gold avec dbt et Trino](#gold).
 
 ## Démarrage
 
@@ -71,7 +77,7 @@ MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=<ton_mot_de_passe>
 
 
-Vérifie que MinIO (http://localhost:9000) et Airflow (http://localhost:8080) répondent.
+Vérifie que MinIO (http://localhost:9000), Airflow (http://localhost:8080) et Trino (http://localhost:8085) répondent.
 
 ### 2. Préparer l'environnement Python
 
@@ -96,18 +102,28 @@ Déposer les CSV du dataset dans `data/sample/` :
 ```powershell
 cd spark\ingestion && python ingest_sources.py
 cd ..\silver && python silver_jobs.py
-cd ..\gold && python gold_jobs.py
+cd ..\..\dbt && dbt build --profiles-dir .
 ```
+
+**Requêter en SQL** : `docker exec -it lakehouse-trino trino`, puis par exemple `SELECT * FROM gold.ecommerce.sales_daily ORDER BY date DESC LIMIT 10;`
+
+**Mise à jour d'une installation existante (anciennes tables en catalogue « hadoop »)** : après `docker compose up -d --build`, lancer une seule fois
+```powershell
+cd spark\common && python migrate_catalog_to_jdbc.py
+```
+Les tables sont enregistrées dans le nouveau catalogue sans être réécrites (historique de time travel conservé). Sans danger si relancé.
 
 ## Structure du projet
 data-lakehouse/
 ├── docker/ # docker-compose, Dockerfile Airflow
 ├── airflow/dags/ # DAG d’orchestration
+├── dbt/ # couche Gold : modèles SQL, tests, macros (dbt-trino)
+├── trino/catalog/ # catalogues Trino bronze/silver/gold (Iceberg JDBC)
 ├── spark/
 │ ├── common/ # config Spark/Iceberg, fonctions de normalisation, scripts de démo
 │ ├── ingestion/ # Bronze
 │ ├── silver/ # nettoyage, validation, jointure
-│ ├── gold/ # agrégats business
+│ ├── gold/ # ancienne couche Gold en PySpark (référence, hors DAG)
 │ └── quality/ # contrôles qualité (scripts + Great Expectations)
 ├── data/sample/gold_export # CSV sources 
 ├── tests/ # tests unitaires (pytest)
@@ -131,6 +147,15 @@ Ingestion brute, typage `string` uniquement (évite toute perte silencieuse de v
 4 tables business, filtrées sur `status = 'success'` uniquement (les commandes échouées/remboursées n'ont jamais généré de revenu réel) :
 - `sales_daily`, `sales_by_product`, `sales_by_region`, `customer_metrics`
 
+Construites par **dbt sur Trino** (`dbt/models/gold/`), à partir des tables Silver écrites par Spark :
+- `stg_successful_orders` (éphémère) : base commune, commandes `success` et revenu de ligne ;
+- 4 modèles `table` en `CREATE OR REPLACE` : la table Iceberg est conservée et chaque exécution ajoute un snapshot, donc le time travel continue de fonctionner ;
+- macro `round_half_up` : arrondi calculé en décimal. Avec le `round()` de Trino sur des doubles, 370 paniers moyens différaient d'un centime de l'ancienne version Spark ; avec la macro, **0 valeur différente sur les 4 tables** (comparaison ligne à ligne du 13/11/2026).
+
+**Tests dbt (33, lancés par `dbt build` à chaque exécution)** : clés non nulles et uniques, intégrité référentielle (`customer_metrics` → `silver.customers`, `orders_enriched` → `silver.customers`), montants positifs et non NaN (tests génériques `positive` / `non_negative`), et réconciliation : les 4 tables Gold doivent donner le même CA total.
+
+Un avertissement (non bloquant) signale **4 286 commandes « success » à montant 0** : 12 988 commandes sources ont `0` comme montant, accepté par la règle Silver `order_amount >= 0`. À trancher : les rejeter en Silver ou les garder.
+
 ## Qualité des données
 
 Deux bugs réels trouvés et corrigés pendant le développement :
@@ -152,13 +177,19 @@ Trois capacités démontrées avec des preuves chiffrées (scripts dans `spark/c
 
 DAG Airflow unique (`lakehouse_pipeline`) :
 
+```
+ingest_bronze → bronze_quality_check → transform_silver → silver_quality_check
+→ dbt_build_gold → gold_quality_check → generate_report
+```
+
+`dbt_build_gold` lance `dbt build` (modèles + tests) : un test dbt en échec arrête le DAG. dbt est installé dans un venv séparé de l'image Airflow (`/opt/dbt_venv`) pour éviter les conflits de dépendances.
 
 Chaque étape bloque la suivante en cas d'échec. Retries configurés (1 tentative, 2 min de délai) pour les échecs transitoires.
 
 ## CI/CD
 
 GitHub Actions, déclenché à chaque push sur `main` :
-- **unit-tests** : lint (ruff) → tests unitaires (pytest : fonctions de normalisation sans Spark, motifs de rejet Silver sur une SparkSession locale, structure du DAG) → couverture
+- **unit-tests** : lint (ruff) → vérification du projet dbt (`dbt parse`) → tests unitaires (pytest : fonctions de normalisation sans Spark, motifs de rejet Silver sur une SparkSession locale, structure du DAG, alignement des catalogues Spark/Trino) → couverture
 - **docker-build-check** : vérifie que l'image Airflow personnalisée reste buildable
 
 Les fonctions de nettoyage (`normalize_category`, `normalize_quantity`, `normalize_status`, `normalize_payment`) sont isolées dans `spark/common/normalizers.py`, sans dépendance Spark, pour des tests rapides. Les règles de rejet Silver (`spark/common/rejection_rules.py`) sont testées sur une SparkSession locale, sans Iceberg ni MinIO.
@@ -174,7 +205,7 @@ Les fonctions de nettoyage (`normalize_category`, `normalize_quantity`, `normali
 
 CA total calculé : ~13,4 milliards (données synthétiques, échelle arbitraire du dataset).
 
-Chiffres remesurés le 13/11/2026 sur les CSV Kaggle `vinaykandimalla/customer-360` : identiques au run du 17/10, et les 4 tables Gold sont identiques valeur par valeur aux exports de `data/gold_export/`.
+Chiffres remesurés le 13/11/2026 sur les CSV Kaggle `vinaykandimalla/customer-360` : identiques au run du 17/10, et les 4 tables Gold sont identiques valeur par valeur aux exports de `data/gold_export/`. Pipeline complet relancé le même jour avec la Gold en dbt sur Trino (Iceberg réel, catalogue JDBC) : mêmes chiffres, 0 valeur différente.
 
 ### Lignes écartées en Silver, par motif
 
@@ -193,7 +224,7 @@ Pourquoi 90 000 dates sont rejetées : seul le format `yyyy-MM-dd` est accepté.
 
 ## Limites connues et pistes non retenues
 
-**dbt** a été testé comme alternative SQL pour la couche Gold. La connexion a fonctionné, mais l'adaptateur `dbt-spark` en mode `session` ne supporte qu'un seul catalogue Spark par défaut — incompatible avec l'architecture à 3 catalogues Iceberg distincts (un par bucket bronze/silver/gold) mise en place dès le début du projet. Une migration vers un catalogue unique avec des namespaces aurait résolu le problème, mais au prix d'une refonte touchant une dizaine de fichiers déjà testés et de la perte de l'historique de time travel démontré. Le choix a été fait de ne pas migrer, dbt n'étant pas une exigence du cahier des charges (listé en extension optionnelle).
+**dbt-spark (abandonné), puis dbt-trino (retenu)** : l'adaptateur `dbt-spark` en mode `session` ne gère qu'un seul catalogue Spark, incompatible avec les 3 catalogues Iceberg. Trino lit plusieurs catalogues, mais pas les catalogues Iceberg de type « hadoop » utilisés au départ. Solution retenue : passer les 3 catalogues en **JDBC (PostgreSQL)**, lisibles par Spark et Trino. Les tables existantes ont été migrées avec `spark/common/migrate_catalog_to_jdbc.py` (procédure Iceberg `register_table`) : aucune donnée réécrite, historique de time travel conservé.
 
 **Doublons d'identité** (même email, `customer_id` différent) : détectés dans `customers` mais volontairement non fusionnés automatiquement (risque de faux positifs) — relève de l'entity resolution/MDM, hors scope du MVP.
 

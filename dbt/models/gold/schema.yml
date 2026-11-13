@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: sales_daily
+    description: Chiffre d'affaires, nombre de commandes et panier moyen par jour.
+    columns:
+      - name: date
+        tests: [not_null, unique]
+      - name: total_orders
+        tests: [not_null, positive]
+      - name: total_revenue
+        tests: [not_null, positive]
+
+  - name: sales_by_product
+    description: Unités vendues et chiffre d'affaires par produit.
+    columns:
+      - name: product_id
+        tests: [not_null, unique]
+      - name: units_sold
+        tests: [positive]
+      - name: revenue
+        tests: [not_null, positive]
+
+  - name: sales_by_region
+    description: Commandes, chiffre d'affaires et panier moyen par pays.
+    columns:
+      - name: region
+        tests: [not_null, unique]
+      - name: revenue
+        tests: [not_null, positive]
+
+  - name: customer_metrics
+    description: Nombre de commandes, total dépensé et panier moyen par client.
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: source('silver', 'customers')
+                field: customer_id
+      - name: total_spent
+        # >= 0 et pas > 0 : 693 clients n'ont que des commandes à montant 0
+        # (voir tests/warn_zero_amount_success_orders.sql)
+        tests: [not_null, non_negative]

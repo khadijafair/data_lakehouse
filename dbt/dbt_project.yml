@@ -1,0 +1,21 @@
+name: lakehouse
+version: "1.0.0"
+config-version: 2
+profile: lakehouse
+
+model-paths: ["models"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages", "logs"]
+
+models:
+  lakehouse:
+    staging:
+      # Le catalogue Iceberg JDBC ne gère pas les vues dans Trino :
+      # le staging est « éphémère » (injecté en CTE dans les modèles Gold).
+      +materialized: ephemeral
+    gold:
+      +materialized: table
+      # CREATE OR REPLACE TABLE : la table Iceberg est conservée et chaque
+      # exécution ajoute un snapshot -> le time travel continue de fonctionner.
+      +on_table_exists: replace

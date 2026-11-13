@@ -1,0 +1,31 @@
+version: 2
+
+sources:
+  - name: silver
+    description: Tables Silver produites par Spark (silver_jobs.py), lues par Trino via le catalogue Iceberg JDBC.
+    database: silver
+    schema: ecommerce
+    tables:
+      - name: orders_enriched
+        description: Commandes valides jointes aux clients et produits (118 909 lignes au 13/11/2026).
+        columns:
+          - name: order_id
+            tests: [not_null, unique]
+          - name: customer_id
+            tests:
+              - not_null
+              - relationships:
+                  arguments:
+                    to: source('silver', 'customers')
+                    field: customer_id
+          - name: status
+            tests:
+              - accepted_values:
+                  arguments:
+                    values: ['success', 'failed', 'pending', 'refunded']
+                  config:
+                    severity: warn
+      - name: customers
+        columns:
+          - name: customer_id
+            tests: [not_null, unique]

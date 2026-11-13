@@ -1,0 +1,14 @@
+# Connexion de dbt à Trino. Les valeurs viennent de variables d'environnement
+# (défauts = exécution depuis la machine hôte avec le docker-compose).
+lakehouse:
+  target: dev
+  outputs:
+    dev:
+      type: trino
+      method: none
+      user: "{{ env_var('TRINO_USER', 'dbt') }}"
+      host: "{{ env_var('TRINO_HOST', 'localhost') }}"
+      port: "{{ env_var('TRINO_PORT', '8085') | int }}"
+      database: gold        # catalogue Trino où dbt écrit
+      schema: ecommerce
+      threads: 4

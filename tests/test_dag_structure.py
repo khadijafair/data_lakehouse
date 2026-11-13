@@ -10,7 +10,7 @@ DAG_FILE = Path(__file__).resolve().parents[1] / "airflow" / "dags" / "lakehouse
 EXPECTED_ORDER = [
     "ingest_bronze", "bronze_quality_check",
     "transform_silver", "silver_quality_check",
-    "transform_gold", "gold_quality_check",
+    "dbt_build_gold", "gold_quality_check",
     "generate_report",
 ]
 
