@@ -22,7 +22,7 @@ spark = get_spark_session("generate-report")
 run_timestamp = datetime.now(timezone.utc)
 lines = []
 
-lines.append(f"# Rapport d'exécution — Pipeline Lakehouse")
+lines.append("# Rapport d'exécution — Pipeline Lakehouse")
 lines.append(f"\n**Date du run** : {run_timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
 
 # ---------- BRONZE ----------
@@ -82,7 +82,7 @@ lines.append("Contrôles qualité exécutés : `check_bronze.py`, `check_silver.
 
 # ---------- DURÉE ----------
 elapsed = time.time() - start_time
-lines.append(f"\n## Durée de génération de ce rapport\n")
+lines.append("\n## Durée de génération de ce rapport\n")
 lines.append(f"{elapsed:.1f} secondes")
 
 spark.stop()
