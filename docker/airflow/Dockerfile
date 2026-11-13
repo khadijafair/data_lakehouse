@@ -11,6 +11,10 @@ USER airflow
 RUN pip install --no-cache-dir pyspark==3.5.2
 
 # dbt dans un venv séparé : ses dépendances entrent en conflit avec celles d'Airflow.
+# Créé en root (l'utilisateur airflow ne peut pas écrire dans /opt), puis rendu à airflow.
 # Versions testées le 13/11/2026 avec Trino 445.
+USER root
 RUN python -m venv /opt/dbt_venv && \
-    /opt/dbt_venv/bin/pip install --no-cache-dir dbt-core==1.12.7 dbt-trino==1.11.0
+    /opt/dbt_venv/bin/pip install --no-cache-dir dbt-core==1.12.7 dbt-trino==1.11.0 && \
+    chown -R airflow: /opt/dbt_venv
+USER airflow
