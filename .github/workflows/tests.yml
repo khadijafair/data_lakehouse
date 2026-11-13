@@ -27,8 +27,15 @@ jobs:
       - name: Linting (ruff)
         run: ruff check spark/ tests/ airflow/
 
+      - name: Vérifier le projet dbt (syntaxe, références, tests déclarés)
+        run: |
+          python -m venv /tmp/dbt_venv
+          /tmp/dbt_venv/bin/pip install dbt-core==1.12.7 dbt-trino==1.11.0
+          /tmp/dbt_venv/bin/dbt parse --project-dir dbt --profiles-dir dbt
+
       - name: Lancer les tests unitaires avec couverture
         run: pytest tests/ -v --cov=spark/common --cov-report=term-missing
+
 
   docker-build-check:
     runs-on: ubuntu-latest
